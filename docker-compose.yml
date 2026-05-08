@@ -1,0 +1,147 @@
+# AgentTrust spike — orquestación local con Docker Compose.
+#
+# Uso:
+#   docker compose up -d            # arranca todo (vault + 3 servicios)
+#   docker compose run --rm demo    # ejecuta el demo end-to-end
+#   docker compose down -v          # para todo y borra volúmenes
+#
+# Requisitos: Docker 20+ con plugin compose v2.
+#
+# Nota: el dockerfile inline (`build:`) usa python:3.11-slim para evitar
+# tener que mantener un Dockerfile separado. Si prefieres separarlo, mueve
+# las instrucciones a `Dockerfile` en la raíz y reemplaza por `build: .`.
+
+services:
+  vault:
+    image: hashicorp/vault:latest
+    container_name: agenttrust-vault
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root-token-spike
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    entrypoint: vault
+    command: server -dev -dev-root-token-id=root-token-spike -dev-listen-address=0.0.0.0:8200
+    healthcheck:
+      test: ["CMD-SHELL", "vault status -address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  vault-init:
+    image: hashicorp/vault:latest
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: root-token-spike
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        vault secrets enable -path=transit transit 2>/dev/null || true
+        vault write -f transit/keys/org-issuer type=ed25519 2>/dev/null || true
+        echo "✓ Vault Transit listo"
+
+  issuer:
+    image: python:3.11-slim
+    container_name: agenttrust-issuer
+    working_dir: /app
+    volumes:
+      - .:/app
+      - data:/app/data
+    ports:
+      - "8000:8000"
+    environment:
+      KEY_CUSTODY_BACKEND: ${KEY_CUSTODY_BACKEND:-local}
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: root-token-spike
+      ISSUER_BASE_URL: http://localhost:8000
+      ORG_DID: did:web:localhost%3A8000
+      SQLITE_PATH: /app/data/agenttrust.db
+      LOCAL_KEY_DIR: /app/data/keys
+      TRUST_FRAMEWORK_PATH: /app/data/trust_framework.json
+    command:
+      - sh
+      - -c
+      - "pip install -q -r requirements.txt && python scripts/bootstrap_org.py && uvicorn issuer.main:app --host 0.0.0.0 --port 8000"
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  verifier:
+    image: python:3.11-slim
+    container_name: agenttrust-verifier
+    working_dir: /app
+    volumes:
+      - .:/app
+      - data:/app/data
+    ports:
+      - "8001:8001"
+    environment:
+      VERIFIER_BASE_URL: http://localhost:8001
+      ORG_DID: did:web:localhost%3A8000
+      SQLITE_PATH: /app/data/agenttrust.db
+      TRUST_FRAMEWORK_PATH: /app/data/trust_framework.json
+    command:
+      - sh
+      - -c
+      - "pip install -q -r requirements.txt && uvicorn verifier.main:app --host 0.0.0.0 --port 8001"
+    depends_on:
+      - issuer
+
+  registry-ui:
+    image: python:3.11-slim
+    container_name: agenttrust-registry
+    working_dir: /app
+    volumes:
+      - .:/app
+      - data:/app/data
+    ports:
+      - "8002:8002"
+    environment:
+      KEY_CUSTODY_BACKEND: ${KEY_CUSTODY_BACKEND:-local}
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: root-token-spike
+      ISSUER_BASE_URL: http://issuer:8000
+      REGISTRY_UI_BASE_URL: http://localhost:8002
+      ORG_DID: did:web:localhost%3A8000
+      SQLITE_PATH: /app/data/agenttrust.db
+      LOCAL_KEY_DIR: /app/data/keys
+    command:
+      - sh
+      - -c
+      - "pip install -q -r requirements.txt && uvicorn registry_ui.main:app --host 0.0.0.0 --port 8002"
+    depends_on:
+      - issuer
+
+  demo:
+    image: python:3.11-slim
+    profiles: ["demo"]
+    working_dir: /app
+    volumes:
+      - .:/app
+      - data:/app/data
+    environment:
+      KEY_CUSTODY_BACKEND: ${KEY_CUSTODY_BACKEND:-local}
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: root-token-spike
+      ISSUER_BASE_URL: http://issuer:8000
+      VERIFIER_BASE_URL: http://verifier:8001
+      REGISTRY_UI_BASE_URL: http://registry-ui:8002
+      ORG_DID: did:web:localhost%3A8000
+      SQLITE_PATH: /app/data/agenttrust.db
+      LOCAL_KEY_DIR: /app/data/keys
+    command:
+      - sh
+      - -c
+      - "pip install -q -r requirements.txt && python scripts/demo.py"
+    depends_on:
+      - issuer
+      - verifier
+      - registry-ui
+
+volumes:
+  data:

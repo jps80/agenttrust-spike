@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Agentes registrados — AgentTrust{% endblock %}
+{% block content %}
+    <h2>Agentes registrados</h2>
+    <p style="color: #6b7280;">Cada agente tiene su propio <code>did:key</code> y un mandato vigente emitido por la organización.</p>
+
+    {% if not agents %}
+        <div class="card empty">
+            <p>No hay agentes dados de alta todavía.</p>
+            <a class="btn" href="/register">Dar de alta el primero</a>
+        </div>
+    {% else %}
+        {% for a in agents %}
+            <div class="card">
+                <div class="agent-row">
+                    <div>
+                        <strong>{{ a.agent_id }}</strong>
+                        <span class="label">{{ a.mandate.context }}</span>
+                        <div class="meta">{{ a.agent_did }}</div>
+                        <div style="margin-top: 0.5rem;">
+                            {% for s in a.mandate.scope %}
+                                <span class="scope-tag">{{ s }}</span>
+                            {% endfor %}
+                        </div>
+                        <div style="font-size: 0.85rem; color: #6b7280; margin-top: 0.5rem;">
+                            Vigente: {{ a.mandate.valid_from }} → {{ a.mandate.valid_until }}
+                        </div>
+                    </div>
+                    <a class="btn btn-secondary" href="/agents/{{ a.agent_id }}">Detalle</a>
+                </div>
+            </div>
+        {% endfor %}
+        <a class="btn" href="/register" style="margin-top: 1rem;">+ Alta de otro agente</a>
+    {% endif %}
+{% endblock %}

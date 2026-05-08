@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Alta de agente — AgentTrust{% endblock %}
+{% block content %}
+    <h2>Alta de agente</h2>
+    <p style="color: #6b7280;">
+        Se generará una clave Ed25519 en el backend de custodia configurado
+        (LocalFile o Vault) y se emitirá la <strong>Mandate Credential</strong>
+        firmada por <code>{{ org_did }}</code>.
+    </p>
+
+    <form method="post" action="/register" class="card">
+        <div class="field">
+            <label for="agent_id">ID del agente</label>
+            <input id="agent_id" name="agent_id" required pattern="[a-zA-Z0-9_-]+" placeholder="ops-agent-001">
+            <div class="help">Identificador interno (caracteres alfanuméricos, guion y guion bajo).</div>
+        </div>
+
+        <div class="field">
+            <label for="delegator_did">DID del delegador (humano supervisor)</label>
+            <input id="delegator_did" name="delegator_did" required value="{{ default_delegator }}">
+            <div class="help">Quién en la organización autoriza la emisión.</div>
+        </div>
+
+        <div class="field">
+            <label for="scope">Scope (acciones permitidas, separadas por coma)</label>
+            <input id="scope" name="scope" required value="{{ default_scope }}">
+            <div class="help">Verbos:recursos. Ej. <code>read:incidents,execute:restart_service</code></div>
+        </div>
+
+        <div class="field">
+            <label for="context">Contexto / proceso</label>
+            <input id="context" name="context" required value="{{ default_context }}">
+        </div>
+
+        <div class="row-2">
+            <div class="field">
+                <label for="valid_from">Vigente desde</label>
+                <input id="valid_from" name="valid_from" required value="{{ default_valid_from }}">
+            </div>
+            <div class="field">
+                <label for="valid_until">Vigente hasta</label>
+                <input id="valid_until" name="valid_until" required value="{{ default_valid_until }}">
+            </div>
+        </div>
+
+        <h3 style="margin-bottom: 0.5rem;">Constraints</h3>
+        <div class="row-2">
+            <div class="field">
+                <label for="max_ops_per_hour">Máx. operaciones/hora</label>
+                <input id="max_ops_per_hour" name="max_ops_per_hour" type="number" value="{{ default_max_ops }}">
+            </div>
+            <div class="field">
+                <label for="allowed_environments">Environments permitidos</label>
+                <input id="allowed_environments" name="allowed_environments" value="{{ default_environments }}">
+                <div class="help">Separados por coma.</div>
+            </div>
+        </div>
+        <div class="field">
+            <label>
+                <input type="checkbox" name="read_only" value="true">
+                Read-only (solo acciones <code>read:*</code>)
+            </label>
+        </div>
+
+        <button type="submit">Dar de alta y emitir mandato</button>
+    </form>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ agent.agent_id }} — AgentTrust{% endblock %}
+{% block content %}
+    <h2>{{ agent.agent_id }}</h2>
+    <a href="/" style="text-decoration: none; color: #6b7280;">&larr; Volver al listado</a>
+
+    <div class="card" style="margin-top: 1rem;">
+        <h3 style="margin-top: 0;">Identidad</h3>
+        <p><strong>Agent DID</strong>: <code class="meta">{{ agent.agent_did }}</code></p>
+        <p><strong>Organización</strong>: <code class="meta">{{ agent.organization_did }}</code></p>
+        <p><strong>Delegador</strong>: <code class="meta">{{ agent.delegator_did }}</code></p>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top: 0;">Mandato</h3>
+        <p><strong>Contexto</strong>: {{ agent.mandate.context }}</p>
+        <p><strong>Vigencia</strong>: {{ agent.mandate.valid_from }} → {{ agent.mandate.valid_until }}</p>
+        <p><strong>Scope</strong>:
+            {% for s in agent.mandate.scope %}<span class="scope-tag">{{ s }}</span>{% endfor %}
+        </p>
+        <p><strong>Constraints</strong>:</p>
+        <pre>{{ agent.mandate.constraints | tojson(indent=2) }}</pre>
+    </div>
+
+    {% if offer_uri %}
+    <div class="card">
+        <h3 style="margin-top: 0;">Credential Offer (OID4VCI)</h3>
+        <p>El agente debe arrancar con esta URI para obtener su VC vía Pre-Authorized Code Flow:</p>
+        <pre>{{ offer_uri }}</pre>
+        <p style="font-size: 0.85rem; color: #6b7280;">
+            Comando para el agente:
+        </p>
+        <pre>python -m agent.main fetch \
+  --agent-id {{ agent.agent_id }} \
+  --credential-offer-uri {{ offer_uri }}</pre>
+    </div>
+    {% endif %}
+{% endblock %}
