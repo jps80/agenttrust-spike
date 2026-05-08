@@ -11,7 +11,7 @@
 #   make demo-a2a       # ejecuta demo_a2a.py Agent-to-Agent (asume servicios arrancados)
 #   make clean          # borra data/ (claves, sqlite, status list)
 
-.PHONY: help install bootstrap run-issuer run-verifier run-registry run-vault init-vault demo demo-a2a start-agents clean
+.PHONY: help install bootstrap run-issuer run-verifier run-registry run-chat run-vault init-vault demo demo-a2a start-agents clean
 
 PYTHON ?= python3
 PIP ?= pip
@@ -31,6 +31,7 @@ help:
 	@echo "  make demo           — ejecuta demo H0→H3 (agente individual)"
 	@echo "  make demo-a2a       — ejecuta demo Agent-to-Agent"
 	@echo "  make start-agents   — arranca agentes IA (Translator + Expert) en :8011/:8010"
+	@echo "  make run-chat       — arranca Chat UI en :8003"
 	@echo "  make clean          — borra data/ (claves, DB, etc.)"
 
 install:
@@ -48,6 +49,10 @@ run-verifier:
 
 run-registry:
 	uvicorn registry_ui.main:app --port $(REGISTRY_UI_PORT) --reload
+
+CHAT_PORT ?= 8003
+run-chat:
+	uvicorn chat_ui.main:app --port $(CHAT_PORT) --reload
 
 run-vault:
 	docker run -d --name vault-spike --rm \

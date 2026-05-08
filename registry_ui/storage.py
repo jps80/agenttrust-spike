@@ -50,10 +50,17 @@ def init_db() -> None:
                 mandate_json      TEXT NOT NULL,
                 offer_id          TEXT,
                 credential_offer  TEXT,
-                created_at        INTEGER NOT NULL
+                created_at        INTEGER NOT NULL,
+                revoked_at        INTEGER
             );
             """
         )
+        # Migration: add revoked_at if upgrading an existing DB
+        try:
+            c.execute("ALTER TABLE registered_agents ADD COLUMN revoked_at INTEGER")
+            c.commit()
+        except Exception:
+            pass
 
 
 def save_agent(
@@ -88,19 +95,28 @@ def save_agent(
         )
 
 
+def mark_revoked(agent_id: str, revoked_at: int) -> None:
+    with _conn() as c:
+        c.execute(
+            "UPDATE registered_agents SET revoked_at=? WHERE agent_id=?",
+            (revoked_at, agent_id),
+        )
+
+
+def _hydrate(d: dict) -> dict:
+    d["mandate"] = json.loads(d.pop("mandate_json"))
+    if d.get("credential_offer"):
+        d["credential_offer"] = json.loads(d["credential_offer"])
+    d["revoked"] = d.get("revoked_at") is not None
+    return d
+
+
 def list_agents() -> list[dict]:
     with _conn() as c:
         rows = c.execute(
             "SELECT * FROM registered_agents ORDER BY created_at DESC"
         ).fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["mandate"] = json.loads(d.pop("mandate_json"))
-        if d.get("credential_offer"):
-            d["credential_offer"] = json.loads(d["credential_offer"])
-        out.append(d)
-    return out
+    return [_hydrate(dict(r)) for r in rows]
 
 
 def get_agent(agent_id: str) -> dict | None:
@@ -110,8 +126,4 @@ def get_agent(agent_id: str) -> dict | None:
         ).fetchone()
     if row is None:
         return None
-    d = dict(row)
-    d["mandate"] = json.loads(d.pop("mandate_json"))
-    if d.get("credential_offer"):
-        d["credential_offer"] = json.loads(d["credential_offer"])
-    return d
+    return _hydrate(dict(row))

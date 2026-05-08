@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AgentTrust — Chat con Agentes IA</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        header h1 { font-size: 1.15rem; font-weight: 600; }
+        header .sub {
+            font-size: 0.8rem;
+            color: #94a3b8;
+            font-family: monospace;
+        }
+        .badge {
+            background: #312e81;
+            color: #a5b4fc;
+            border: 1px solid #4f46e5;
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            margin-left: auto;
+        }
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            max-width: 860px;
+            width: 100%;
+            margin: 0 auto;
+        }
+        .empty-state {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #475569;
+            text-align: center;
+            gap: 0.75rem;
+        }
+        .empty-state .icon { font-size: 2.5rem; }
+        .empty-state h2 { font-size: 1.1rem; font-weight: 500; color: #64748b; }
+        .empty-state p { font-size: 0.85rem; max-width: 420px; line-height: 1.6; }
+        /* Exchange card */
+        .exchange {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .exchange-question {
+            padding: 1rem 1.25rem;
+            background: #0f172a;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+        }
+        .exchange-question .avatar {
+            width: 28px; height: 28px;
+            background: #4f46e5;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.7rem; font-weight: 700; flex-shrink: 0;
+            margin-top: 2px;
+        }
+        .exchange-question .text { font-size: 0.95rem; line-height: 1.5; }
+        .steps { padding: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; }
+        .step {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 0.75rem;
+            align-items: start;
+        }
+        .step-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+            padding-top: 2px;
+        }
+        .step-badge .dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .step-1 .dot { background: #818cf8; }
+        .step-1 .step-badge { color: #818cf8; }
+        .step-2 .dot { background: #34d399; }
+        .step-2 .step-badge { color: #34d399; }
+        .step-3 .dot { background: #fbbf24; }
+        .step-3 .step-badge { color: #fbbf24; }
+        .step-4 .dot { background: #f472b6; }
+        .step-4 .step-badge { color: #f472b6; }
+        .step-text {
+            font-size: 0.875rem;
+            line-height: 1.55;
+            color: #cbd5e1;
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+        }
+        .step-4 .step-text {
+            color: #e2e8f0;
+            background: #1a2744;
+            border-color: #2d3d6b;
+            font-size: 0.9rem;
+        }
+        .mandate-note {
+            margin: 0 1.25rem 1.25rem;
+            padding: 0.6rem 0.75rem;
+            background: #0a1628;
+            border: 1px solid #1e3a5f;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            color: #64748b;
+            font-family: monospace;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .mandate-note .icon { font-size: 0.9rem; }
+        /* Error card */
+        .error-card {
+            background: #1e293b;
+            border: 1px solid #dc2626;
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+            color: #fca5a5;
+            font-size: 0.9rem;
+        }
+        .error-card strong { color: #ef4444; }
+        /* Loading */
+        .loading-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 1.5rem 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+        .spinner {
+            width: 20px; height: 20px;
+            border: 2px solid #334155;
+            border-top-color: #818cf8;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            flex-shrink: 0;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        /* Input bar */
+        .input-bar {
+            background: #1e293b;
+            border-top: 1px solid #334155;
+            padding: 1rem 2rem;
+        }
+        .input-inner {
+            max-width: 860px;
+            margin: 0 auto;
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-end;
+        }
+        .input-inner textarea {
+            flex: 1;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #e2e8f0;
+            font-family: inherit;
+            font-size: 0.95rem;
+            padding: 0.7rem 1rem;
+            resize: none;
+            line-height: 1.5;
+            min-height: 44px;
+            max-height: 200px;
+            overflow-y: auto;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        .input-inner textarea:focus { border-color: #4f46e5; }
+        .input-inner textarea::placeholder { color: #475569; }
+        .send-btn {
+            background: #4f46e5;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.7rem 1.25rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+            white-space: nowrap;
+            height: 44px;
+        }
+        .send-btn:hover { background: #4338ca; }
+        .send-btn:disabled { background: #334155; color: #475569; cursor: not-allowed; }
+        .hint { font-size: 0.75rem; color: #475569; margin-top: 0.5rem; text-align: center; }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>AgentTrust — Chat</h1>
+            <div class="sub">Agent1 (Translator) → Agent2 (Expert) · Claude Opus 4.7</div>
+        </div>
+        <span class="badge">VP JWT + Mandato</span>
+    </header>
+
+    <div class="chat-area" id="chatArea">
+        <div class="empty-state" id="emptyState">
+            <div class="icon">🤖</div>
+            <h2>Haz una pregunta en español</h2>
+            <p>
+                Agent1 la traducirá al inglés, presentará su <strong>mandato</strong> a
+                Agent2, que verificará la cadena completa antes de responder con Claude.
+                La respuesta vuelve traducida al español.
+            </p>
+        </div>
+    </div>
+
+    <div class="input-bar">
+        <div class="input-inner">
+            <textarea
+                id="questionInput"
+                placeholder="¿Cuál es la capital de Francia?"
+                rows="1"
+                onkeydown="handleKey(event)"
+                oninput="autoResize(this)"
+            ></textarea>
+            <button class="send-btn" id="sendBtn" onclick="sendQuestion()">Enviar</button>
+        </div>
+        <div class="hint">Intro para enviar · Shift+Intro para nueva línea</div>
+    </div>
+
+    <script>
+        const chatArea = document.getElementById('chatArea');
+        const emptyState = document.getElementById('emptyState');
+        const input = document.getElementById('questionInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        function autoResize(el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+        }
+
+        function handleKey(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendQuestion();
+            }
+        }
+
+        function scrollBottom() {
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        async function sendQuestion() {
+            const question = input.value.trim();
+            if (!question) return;
+
+            emptyState.style.display = 'none';
+            input.value = '';
+            input.style.height = 'auto';
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Enviando…';
+
+            // Show user question
+            const userCard = document.createElement('div');
+            userCard.className = 'exchange-question';
+            userCard.innerHTML = `
+                <div class="avatar">Tú</div>
+                <div class="text">${escHtml(question)}</div>
+            `;
+            chatArea.appendChild(userCard);
+
+            // Show loading
+            const loadingCard = document.createElement('div');
+            loadingCard.className = 'loading-card';
+            loadingCard.innerHTML = `
+                <div class="spinner"></div>
+                <span>Agent1 traduce · Agent2 verifica mandato (7 pasos) · Claude responde…</span>
+            `;
+            chatArea.appendChild(loadingCard);
+            scrollBottom();
+
+            try {
+                const resp = await fetch('/ask', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({question}),
+                });
+                const data = await resp.json();
+                loadingCard.remove();
+
+                if (!resp.ok || data.error) {
+                    const errCard = document.createElement('div');
+                    errCard.className = 'error-card';
+                    errCard.innerHTML = `<strong>Error:</strong> ${escHtml(data.error || 'Error desconocido')}`;
+                    chatArea.appendChild(errCard);
+                } else {
+                    renderExchange(data, userCard);
+                }
+            } catch (err) {
+                loadingCard.remove();
+                const errCard = document.createElement('div');
+                errCard.className = 'error-card';
+                errCard.innerHTML = `<strong>Error de red:</strong> ${escHtml(err.message)}`;
+                chatArea.appendChild(errCard);
+            }
+
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Enviar';
+            scrollBottom();
+        }
+
+        function renderExchange(data, questionEl) {
+            // Replace plain question with full exchange card
+            const card = document.createElement('div');
+            card.className = 'exchange';
+
+            const qRow = document.createElement('div');
+            qRow.className = 'exchange-question';
+            qRow.innerHTML = `
+                <div class="avatar">Tú</div>
+                <div class="text">${escHtml(data.question_es)}</div>
+            `;
+            card.appendChild(qRow);
+
+            const steps = document.createElement('div');
+            steps.className = 'steps';
+            steps.innerHTML = `
+                <div class="step step-1">
+                    <div class="step-badge"><span class="dot"></span>AGENT1 · ES→EN</div>
+                    <div class="step-text">${escHtml(data.question_en)}</div>
+                </div>
+                <div class="step step-2">
+                    <div class="step-badge"><span class="dot"></span>AGENT2 · CLAUDE</div>
+                    <div class="step-text">${escHtml(data.answer_en)}</div>
+                </div>
+                <div class="step step-3">
+                    <div class="step-badge"><span class="dot"></span>AGENT1 · EN→ES</div>
+                    <div class="step-text">${escHtml(data.answer_es)}</div>
+                </div>
+            `;
+            card.appendChild(steps);
+
+            const note = document.createElement('div');
+            note.className = 'mandate-note';
+            note.innerHTML = `<span class="icon">🔐</span> Agent2 verificó el VP JWT de Agent1: challenge · firma · nonce · issuer · holder binding · revocación · scope`;
+            card.appendChild(note);
+
+            questionEl.replaceWith(card);
+        }
+
+        function escHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/\n/g, '<br>');
+        }
+    </script>
+</body>
+</html>

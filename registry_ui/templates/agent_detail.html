@@ -1,8 +1,26 @@
 {% extends "base.html" %}
 {% block title %}{{ agent.agent_id }} — AgentTrust{% endblock %}
 {% block content %}
-    <h2>{{ agent.agent_id }}</h2>
+    <h2>
+        {{ agent.agent_id }}
+        {% if agent.revoked %}
+            <span class="badge-revoked">REVOCADO</span>
+        {% else %}
+            <span class="badge-active">ACTIVO</span>
+        {% endif %}
+    </h2>
     <a href="/" style="text-decoration: none; color: #6b7280;">&larr; Volver al listado</a>
+
+    {% set msg = request.query_params.get("msg") %}
+    {% if msg == "revocado" %}
+        <div class="alert alert-warning" style="margin-top: 1rem;">
+            Mandato revocado correctamente. El agente no podrá presentar su credencial a partir de ahora.
+        </div>
+    {% elif msg == "ya_revocado" %}
+        <div class="alert alert-warning" style="margin-top: 1rem;">
+            Este mandato ya estaba revocado.
+        </div>
+    {% endif %}
 
     <div class="card" style="margin-top: 1rem;">
         <h3 style="margin-top: 0;">Identidad</h3>
@@ -27,12 +45,37 @@
         <h3 style="margin-top: 0;">Credential Offer (OID4VCI)</h3>
         <p>El agente debe arrancar con esta URI para obtener su VC vía Pre-Authorized Code Flow:</p>
         <pre>{{ offer_uri }}</pre>
-        <p style="font-size: 0.85rem; color: #6b7280;">
-            Comando para el agente:
-        </p>
+        <p style="font-size: 0.85rem; color: #6b7280;">Comando para el agente:</p>
         <pre>python -m agent.main fetch \
   --agent-id {{ agent.agent_id }} \
   --credential-offer-uri {{ offer_uri }}</pre>
     </div>
     {% endif %}
+
+    <div class="card" style="{% if agent.revoked %}border-color: #fca5a5; background: #fff8f8;{% else %}border-color: #fca5a5;{% endif %}">
+        <h3 style="margin-top: 0; color: #dc2626;">Revocar mandato</h3>
+        {% if agent.revoked %}
+            <p style="color: #991b1b;">
+                Este mandato fue revocado. El bit de revocación está marcado en el
+                <strong>Bitstring Status List</strong> del issuer. Cualquier intento del
+                agente de presentar su credencial será rechazado por el verifier.
+            </p>
+            {% if agent.revoked_at %}
+            <p style="font-size: 0.85rem; color: #6b7280;">
+                Revocado el: {{ agent.revoked_at }}
+            </p>
+            {% endif %}
+        {% else %}
+            <p style="color: #6b7280; font-size: 0.9rem;">
+                Al revocar, el issuer marcará el bit de este agente en el
+                <strong>Bitstring Status List</strong>. El verifier y cualquier otro agente
+                consultarán esa lista al validar la credencial — aunque el JWT no haya
+                expirado, la presentación será rechazada.
+            </p>
+            <form method="post" action="/agents/{{ agent.agent_id }}/revoke"
+                  onsubmit="return confirm('¿Seguro que quieres revocar el mandato de {{ agent.agent_id }}? Esta acción marca el bit en el Bitstring Status List y no se puede deshacer en este spike.');">
+                <button type="submit" class="btn btn-danger">Revocar mandato</button>
+            </form>
+        {% endif %}
+    </div>
 {% endblock %}

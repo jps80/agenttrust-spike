@@ -173,7 +173,6 @@ def agent_detail(agent_id: str, request: Request):
     agent = storage.get_agent(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
-    # URL útil para que el usuario copie en el comando del agente
     offer_uri = None
     if agent.get("offer_id"):
         offer_uri = f"{ISSUER_BASE_URL}/credential-offer/{agent['offer_id']}"
@@ -181,6 +180,29 @@ def agent_detail(agent_id: str, request: Request):
         "agent_detail.html",
         {"request": request, "agent": agent, "offer_uri": offer_uri},
     )
+
+
+@app.post("/agents/{agent_id}/revoke")
+def revoke_agent(agent_id: str, request: Request):
+    agent = storage.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    if agent.get("revoked"):
+        return RedirectResponse(url=f"/agents/{agent_id}?msg=ya_revocado", status_code=303)
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                f"{ISSUER_BASE_URL}/admin/revoke",
+                json={"agent_did": agent["agent_did"]},
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Issuer no responde: {e}")
+
+    storage.mark_revoked(agent_id, now_ts())
+    print(f"[registry_ui] Mandato de '{agent_id}' REVOCADO vía UI", flush=True)
+    return RedirectResponse(url=f"/agents/{agent_id}?msg=revocado", status_code=303)
 
 
 # ---------------------------------------------------------------------------

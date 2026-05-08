@@ -2,7 +2,7 @@
 {% block title %}Agentes registrados — AgentTrust{% endblock %}
 {% block content %}
     <h2>Agentes registrados</h2>
-    <p style="color: #6b7280;">Cada agente tiene su propio <code>did:key</code> y un mandato vigente emitido por la organización.</p>
+    <p style="color: #6b7280;">Cada agente tiene su propio <code>did:key</code> y un mandato emitido por la organización.</p>
 
     {% if not agents %}
         <div class="card empty">
@@ -11,11 +11,16 @@
         </div>
     {% else %}
         {% for a in agents %}
-            <div class="card">
+            <div class="card" style="{% if a.revoked %}opacity: 0.75; border-color: #fca5a5;{% endif %}">
                 <div class="agent-row">
                     <div>
                         <strong>{{ a.agent_id }}</strong>
                         <span class="label">{{ a.mandate.context }}</span>
+                        {% if a.revoked %}
+                            <span class="badge-revoked">REVOCADO</span>
+                        {% else %}
+                            <span class="badge-active">ACTIVO</span>
+                        {% endif %}
                         <div class="meta">{{ a.agent_did }}</div>
                         <div style="margin-top: 0.5rem;">
                             {% for s in a.mandate.scope %}
