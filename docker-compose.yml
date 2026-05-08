@@ -143,5 +143,34 @@ services:
       - verifier
       - registry-ui
 
+  demo-a2a:
+    image: python:3.11-slim
+    profiles: ["demo-a2a"]
+    working_dir: /app
+    volumes:
+      - .:/app
+      - data:/app/data
+    environment:
+      KEY_CUSTODY_BACKEND: ${KEY_CUSTODY_BACKEND:-local}
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: root-token-spike
+      ISSUER_BASE_URL: http://issuer:8000
+      VERIFIER_BASE_URL: http://verifier:8001
+      REGISTRY_UI_BASE_URL: http://registry-ui:8002
+      AGENT2_BASE_URL: http://localhost:8010
+      ORG_DID: did:web:localhost%3A8000
+      SQLITE_PATH: /app/data/agenttrust.db
+      LOCAL_KEY_DIR: /app/data/keys
+    ports:
+      - "8010:8010"
+    command:
+      - sh
+      - -c
+      - "pip install -q -r requirements.txt && python scripts/demo_a2a.py"
+    depends_on:
+      - issuer
+      - verifier
+      - registry-ui
+
 volumes:
   data:

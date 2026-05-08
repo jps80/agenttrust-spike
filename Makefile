@@ -7,10 +7,11 @@
 #   make run-registry   # arranca el registry UI en :8002
 #   make run-vault      # arranca Vault dev mode en Docker (opcional)
 #   make init-vault     # configura Vault Transit y la clave org
-#   make demo           # ejecuta demo.py (asume servicios arrancados)
+#   make demo           # ejecuta demo.py H0→H3 (asume servicios arrancados)
+#   make demo-a2a       # ejecuta demo_a2a.py Agent-to-Agent (asume servicios arrancados)
 #   make clean          # borra data/ (claves, sqlite, status list)
 
-.PHONY: help install bootstrap run-issuer run-verifier run-registry run-vault init-vault demo clean
+.PHONY: help install bootstrap run-issuer run-verifier run-registry run-vault init-vault demo demo-a2a clean
 
 PYTHON ?= python3
 PIP ?= pip
@@ -27,7 +28,8 @@ help:
 	@echo "  make run-registry   — registry UI en :$(REGISTRY_UI_PORT)"
 	@echo "  make run-vault      — Vault dev en Docker"
 	@echo "  make init-vault     — Vault Transit + clave org"
-	@echo "  make demo           — ejecuta demo end-to-end"
+	@echo "  make demo           — ejecuta demo H0→H3 (agente individual)"
+	@echo "  make demo-a2a       — ejecuta demo Agent-to-Agent"
 	@echo "  make clean          — borra data/ (claves, DB, etc.)"
 
 install:
@@ -58,6 +60,9 @@ init-vault:
 
 demo:
 	$(PYTHON) scripts/demo.py
+
+demo-a2a:
+	$(PYTHON) scripts/demo_a2a.py
 
 clean:
 	rm -rf data/agents data/keys data/agenttrust.db data/trust_framework.json

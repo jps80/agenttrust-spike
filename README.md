@@ -1,6 +1,6 @@
 #  AgentAI VC ID — Spike
 
-**Validación técnica end-to-end en 4 hipótesis.**
+**Validación técnica end-to-end en 4 hipótesis + protocolo Agent-to-Agent (A2A).**
 Stack: Python 3.11+, FastAPI, Ed25519, OID4VCI Pre-Authorized Code Flow, OID4VP, W3C VCDM 2.0 (JWT), Bitstring Status List, HashiCorp Vault.
 
 ---
@@ -13,6 +13,7 @@ Stack: Python 3.11+, FastAPI, Ed25519, OID4VCI Pre-Authorized Code Flow, OID4VP,
 | **H1** | ¿Podemos emitir una VC vía OID4VCI a un sujeto NO humano? | `issuer/` — mock Business Wallet con OID4VCI Pre-Auth Flow |
 | **H2** | ¿Cómo custodia el agente sus claves sin Secure Enclave / biometría? | `shared/key_custody/` — interfaz con backends `LocalFile` y `Vault` |
 | **H3** | ¿Puede el agente presentar su credencial vía OID4VP de forma autónoma? | `verifier/` + `agent/holder.py` — flow sin humano en el loop |
+| **A2A** | ¿Pueden dos agentes identificarse mutuamente y delegar acciones con verificación de mandato? | `agent/peer_server.py` + `agent/peer_client.py` — protocolo Agent-to-Agent |
 
 ---
 
@@ -36,41 +37,75 @@ Stack: Python 3.11+, FastAPI, Ed25519, OID4VCI Pre-Authorized Code Flow, OID4VP,
 │  :8002 (H0)      │       │  :8200 (Transit) │
 └────────┬─────────┘       └─────────┬────────┘
          │                           │
-         │ persiste alta             │ custodia clave
-         │ del agente                │ de la organización
+         │ registra agentes          │ custodia claves
          ▼                           ▼
 ┌──────────────────────────────────────────────┐
 │  Issuer / Mock Business Wallet               │
 │  :8000  (H1 — OID4VCI + Status List)         │
 │  /.well-known/did.json   ← did:web org       │
-│  /.well-known/openid-credential-issuer       │
-│  /credential-offer/{id}                      │
-│  /token                                      │
-│  /credential                                 │
-│  /status-list/{id}                           │
+│  /credential-offer/{id} · /token · /credential│
+│  /status-list/{id}  ← revocación            │
 └────────────────┬─────────────────────────────┘
-                 │
-                 │ emite Mandate VC
-                 ▼
+                 │ emite Mandate VC a cada agente
+        ┌────────┴─────────┐
+        ▼                  ▼
+┌───────────────┐  ┌───────────────────────────┐
+│   Agent1      │  │   Agent2                  │
+│  (Incident    │  │  (Infra Operator)         │
+│   Manager)    │  │                           │
+│  did:key:…    │  │  did:key:…                │
+│  Mandate VC   │  │  Mandate VC               │
+│               │  │  peer_server :8010        │
+│  PeerClient ──┼──┼▶ POST /peer/identify      │
+│               │  │    verifica VC de Agent1  │
+│               │◀─┼── devuelve VC de Agent2   │
+│  verifica VC  │  │                           │
+│  de Agent2    │  │                           │
+│               │  │                           │
+│  PeerClient ──┼──┼▶ POST /peer/action/…      │
+│  presenta VP  │  │    verifica mandato       │
+│  (mandato)    │  │    ejecuta acción         │
+│               │◀─┼── {authorized, result}    │
+└───────┬───────┘  └───────────────────────────┘
+        │
+        │ presenta VP al verifier central
+        ▼            (para sus propias acciones)
 ┌──────────────────────────────────────────────┐
-│  Agent (Tipo 3: framework + tool-calling +   │
-│  runtime persistente, single agent, sin MCP) │
-│  - Holder OID4VCI / OID4VP                   │
-│  - KeyCustody (LocalFile o Vault)            │
-│  - Tool-calling loop                         │
-└────────────────┬─────────────────────────────┘
-                 │
-                 │ presenta VP antes de cada acción
-                 ▼
-┌──────────────────────────────────────────────┐
-│  Verifier                                    │
-│  :8001 (H3 — OID4VP)                         │
-│  - Valida VP/VC                              │
-│  - Resuelve did:web del emisor               │
-│  - Comprueba Status List                     │
+│  Verifier  :8001 (H3 — OID4VP)               │
+│  - Valida VP/VC · did:web · Status List      │
 │  - Evalúa scope + constraints + validez      │
-│  - AUTORIZA / DENIEGA acción                 │
+│  - AUTORIZA / DENIEGA                        │
 └──────────────────────────────────────────────┘
+```
+
+### Flujo A2A detallado
+
+```
+Agent1                          Agent2 (peer_server)
+  │                                    │
+  │── POST /peer/identify ────────────▶│
+  │   {agent_did, vc_jwt}              │ verifica firma VC, trust framework,
+  │                                    │ revocación
+  │◀─ {verified, agent_did, vc_jwt} ───│
+  │   Agent1 verifica la VC de Agent2  │
+  │                                    │
+  │── POST /peer/action/challenge ────▶│
+  │   {action, context}                │ genera challenge_id + nonce
+  │◀─ {challenge_id, nonce} ───────────│
+  │                                    │
+  │   construye VP JWT                 │
+  │   (envuelve Mandate VC, firma      │
+  │    con su clave privada, nonce)    │
+  │                                    │
+  │── POST /peer/action/submit ───────▶│
+  │   {challenge_id, vp_token, action} │ [1] challenge válido
+  │                                    │ [2] firma VP (holder binding)
+  │                                    │ [3] nonce anti-replay
+  │                                    │ [4] firma VC (issuer de confianza)
+  │                                    │ [5] sujeto VC == firmante VP
+  │                                    │ [6] no revocada
+  │                                    │ [7] scope cubre la acción
+  │◀─ {authorized, result} ────────────│ ejecuta la acción si todo pasa
 ```
 
 ---
@@ -224,10 +259,16 @@ curl http://localhost:8002/health
 
 Si los tres devuelven `"status":"ok"`, todo está listo.
 
-### Paso 7: Ejecutar la demo end-to-end
+### Paso 7: Ejecutar las demos
 
+**Demo H0→H3 (agente individual):**
 ```bash
 python3 scripts/demo.py
+```
+
+**Demo A2A (dos agentes interactuando):**
+```bash
+python3 scripts/demo_a2a.py
 ```
 
 **Salida esperada (resumen):**
@@ -446,7 +487,10 @@ agenttrust-spike/
 │   ├── main.py                             # CLI: subcomandos fetch y run
 │   ├── holder.py                           # OID4VCI receiver + OID4VP presenter
 │   ├── runtime.py                          # Loop: para cada acción → presentar VP → ejecutar
-│   └── tools.py                            # Tools de ejemplo (read_incident, restart_service, ...)
+│   ├── tools.py                            # Tools de ejemplo (read_incident, restart_service, ...)
+│   ├── peer_server.py                      # [A2A] FastAPI: Agent2 acepta peticiones de otros agentes
+│   ├── peer_client.py                      # [A2A] Cliente HTTP: Agent1 llama a Agent2
+│   └── peer_tools.py                       # [A2A] Acciones que Agent2 puede ejecutar (database_backup, …)
 │
 ├── registry_ui/                            # H0: mini-UI de alta de agentes
 │   ├── __init__.py
@@ -461,7 +505,8 @@ agenttrust-spike/
 ├── scripts/
 │   ├── bootstrap_org.py                    # Inicializa identidad de la organización
 │   ├── init_vault.sh                       # Setup de Vault Transit + clave org
-│   └── demo.py                             # Recorrido end-to-end H0→H1→H2→H3
+│   ├── demo.py                             # Demo H0→H1→H2→H3 (agente individual)
+│   └── demo_a2a.py                         # [A2A] Demo Agent-to-Agent end-to-end
 │
 └── data/                                   # Generado en runtime (en .gitignore)
     └── .gitkeep
@@ -485,6 +530,7 @@ agenttrust-spike/
 - **H1** → `issuer/main.py` (endpoints OID4VCI) + `shared/credential.py` (schema Mandate Credential) + `agent/holder.py` (lado holder del flow)
 - **H2** → `shared/key_custody/base.py` (la abstracción) + `local_file.py` y `vault.py` (las dos implementaciones)
 - **H3** → `verifier/main.py` (validación completa) + `verifier/policy.py` (reglas R0-R5) + `agent/holder.py` (presentación autónoma)
+- **A2A** → `agent/peer_server.py` (servidor de Agent2) + `agent/peer_client.py` (cliente de Agent1) + `scripts/demo_a2a.py`
 
 ---
 
@@ -620,7 +666,8 @@ make run-verifier   # uvicorn verifier en :8001
 make run-registry   # uvicorn registry_ui en :8002
 make run-vault      # docker run vault dev mode
 make init-vault     # init_vault.sh
-make demo           # scripts/demo.py
+make demo           # scripts/demo.py  (H0→H3)
+make demo-a2a       # scripts/demo_a2a.py  (A2A)
 make clean          # borra data/
 ```
 
@@ -630,12 +677,12 @@ make clean          # borra data/
 
 | Elemento | Por qué se difiere |
 |----------|-------------------|
-| Anclaje on-chain de acciones | No necesario para validar las 4 hipótesis. Iteración 2 |
-| Interacción A2A (agente↔agente) | El verificador es servicio convencional, no agente. Diferido |
+| Anclaje on-chain de acciones | No necesario para validar las hipótesis. Iteración 2 |
 | Integración con MCP | Alcance del SDK del producto, no del spike |
 | ERC-8004 | Referencia conceptual, no implementación |
 | Integración real con Identfy Business Wallet | Mock — el spike valida el contrato OID4VCI, no el deploy productivo |
 | UI productiva | La de H0 es funcional, no productiva |
+| Descubrimiento automático de peers | Los peers se configuran por URL. Service discovery en iteración 2 |
 
 ---
 
@@ -643,6 +690,7 @@ make clean          # borra data/
 
 El spike cierra cuando se entrega:
 
-1. **Demo funcional 5-10 min** — `python scripts/demo.py` con output legible
-2. **Documento de decisión por hipótesis** — go/no-go con evidencia (el README ya recoge las decisiones de stack)
-3. **Lista de hallazgos para iteración 1** — qué se reescribirá, qué se reutilizará
+1. **Demo funcional H0→H3** — `python scripts/demo.py` con output legible mostrando identidad asignada, credencial recibida, presentación y decisión del verifier
+2. **Demo A2A** — `python scripts/demo_a2a.py` mostrando identificación mutua entre agentes, presentación de mandato y ejecución delegada
+3. **Documento de decisión por hipótesis** — go/no-go con evidencia (el README recoge las decisiones de stack)
+4. **Lista de hallazgos para iteración 1** — qué se reescribirá, qué se reutilizará
