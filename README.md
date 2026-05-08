@@ -34,13 +34,14 @@ Stack: Python 3.11+, FastAPI, Ed25519, OID4VCI Pre-Authorized Code Flow, OID4VP,
 ## Arquitectura de servicios
 
 ```
-┌──────────────────┐       ┌──────────────────┐       ┌─────────────────────┐
-│  Registry UI     │       │  HashiCorp Vault  │       │  Anthropic Claude   │
-│  :8002 (H0)      │       │  :8200 (Transit)  │       │  API (claude-opus-  │
-└────────┬─────────┘       └─────────┬─────────┘       │  4-7)               │
-         │                           │                  └────────┬────────────┘
-         │ registra agentes          │ custodia claves           │ IA
-         ▼                           ▼                           │
+┌──────────────────┐  ┌──────────────┐  ┌──────────────────┐  ┌──────────────────────┐
+│  Registry UI     │  │  Chat UI     │  │  HashiCorp Vault  │  │  Anthropic Claude    │
+│  :8002 (H0)      │  │  :8003       │  │  :8200 (Transit)  │  │  API (claude-opus-   │
+│  [+ Revocar]     │  │  (preguntas) │  │                   │  │  4-7)                │
+└────────┬─────────┘  └──────┬───────┘  └─────────┬─────────┘  └────────┬─────────────┘
+         │                   │                     │                     │ IA
+         │ registra/revoca   │ POST /ask           │ custodia claves     │
+         ▼                   ▼                     ▼                     │
 ┌──────────────────────────────────────────────┐                │
 │  Issuer / Mock Business Wallet               │                │
 │  :8000  (H1 — OID4VCI + Status List)         │                │
@@ -309,6 +310,8 @@ python3 scripts/demo_a2a.py
 
 Abre http://localhost:8002/ en tu navegador. Verás el agente `demo-agent-001` ya registrado por el script de demo.
 
+Desde el detalle de cualquier agente puedes **revocar su mandato** con el botón rojo. Al hacerlo, el issuer marca el bit en el Bitstring Status List y cualquier intento posterior del agente de usar su credencial será rechazado — aunque el JWT no haya expirado.
+
 ---
 
 ## Agentes IA con Claude (hipótesis IA)
@@ -403,6 +406,33 @@ curl -s -X POST http://localhost:8011/ask \
      -H 'Content-Type: application/json' \
      -d '{"question": "¿Cuáles son las principales diferencias entre TCP y UDP?"}' | python3 -m json.tool
 ```
+
+### Chat UI — interfaz web (`:8003`)
+
+Como alternativa al `curl`, puedes usar la interfaz de chat. Con los agentes IA ya en marcha:
+
+```bash
+# Terminal 5 — Chat UI
+uvicorn chat_ui.main:app --port 8003 --reload
+# o:
+make run-chat
+```
+
+Abre http://localhost:8003/ en el navegador. Escribe la pregunta en español y la UI muestra los 4 pasos del flujo:
+
+1. **AGENT1 · ES→EN** — pregunta traducida al inglés
+2. **AGENT2 · CLAUDE** — respuesta en inglés generada por Claude
+3. **AGENT1 · EN→ES** — respuesta traducida al español
+4. Nota de protocolo: *"Agent2 verificó el VP JWT de Agent1: challenge · firma · nonce · issuer · holder binding · revocación · scope"*
+
+Si el mandato de Agent1 está revocado (desde la Registry UI), la Chat UI muestra el error directamente en pantalla.
+
+### Demostrar revocación con la Chat UI
+
+1. Arranca los agentes IA (`make start-agents`) y la Chat UI (`make run-chat`)
+2. Haz una pregunta — funciona correctamente
+3. Ve a http://localhost:8002/, abre el agente `translator-001` y pulsa **Revocar mandato**
+4. Vuelve a la Chat UI y envía otra pregunta — verás el error de mandato revocado
 
 ### Lo que demuestran los logs
 
@@ -558,15 +588,21 @@ agenttrust-spike/
 │   ├── peer_tools.py                       # [A2A] Acciones que Agent2 puede ejecutar (database_backup, answer_question, …)
 │   └── agent1_server.py                    # [IA] FastAPI :8011 — Translator ES↔EN
 │
-├── registry_ui/                            # H0: mini-UI de alta de agentes
+├── registry_ui/                            # H0: mini-UI de alta y revocación de agentes
 │   ├── __init__.py
-│   ├── main.py                             # FastAPI + Jinja2 + API JSON
-│   ├── storage.py                          # SQLite: agentes registrados
+│   ├── main.py                             # FastAPI + Jinja2 + API JSON + POST /agents/{id}/revoke
+│   ├── storage.py                          # SQLite: agentes registrados + revoked_at
 │   └── templates/
-│       ├── base.html
-│       ├── index.html
+│       ├── base.html                       # Estilos: btn-danger, badge-revoked/active, alert
+│       ├── index.html                      # Listado con badge ACTIVO/REVOCADO
 │       ├── register.html
-│       └── agent_detail.html
+│       └── agent_detail.html               # Botón "Revocar mandato" + estado de revocación
+│
+├── chat_ui/                                # [IA] Interfaz web de chat con Agent1
+│   ├── __init__.py
+│   ├── main.py                             # FastAPI :8003 — proxy a Agent1 /ask
+│   └── templates/
+│       └── index.html                      # Chat UI: muestra los 4 pasos ES→EN→respuesta→ES
 │
 ├── scripts/
 │   ├── bootstrap_org.py                    # Inicializa identidad de la organización
@@ -588,12 +624,12 @@ agenttrust-spike/
 
 ## Mapa hipótesis → ficheros (lectura recomendada)
 
-- **H0** → `registry_ui/main.py` + `registry_ui/storage.py` + `scripts/bootstrap_org.py`
+- **H0** → `registry_ui/main.py` + `registry_ui/storage.py` + `scripts/bootstrap_org.py` (revocación: `POST /agents/{id}/revoke`)
 - **H1** → `issuer/main.py` + `shared/credential.py` + `agent/holder.py`
 - **H2** → `shared/key_custody/base.py` + `local_file.py` + `vault.py`
 - **H3** → `verifier/main.py` + `verifier/policy.py` + `agent/holder.py`
 - **A2A** → `agent/peer_server.py` + `agent/peer_client.py` + `scripts/demo_a2a.py`
-- **IA** → `shared/claude_client.py` + `agent/agent1_server.py` + `agent/peer_tools.py` (execute:answer_question) + `scripts/start_ai_agents.py`
+- **IA** → `shared/claude_client.py` + `agent/agent1_server.py` + `agent/peer_tools.py` (execute:answer_question) + `scripts/start_ai_agents.py` + `chat_ui/` (interfaz web)
 
 ---
 
@@ -609,7 +645,8 @@ make run-vault      # docker run vault dev mode
 make init-vault     # init_vault.sh
 make demo           # scripts/demo.py  (H0→H3)
 make demo-a2a       # scripts/demo_a2a.py  (A2A)
-make start-agents   # scripts/start_ai_agents.py  (Translator + Expert con Claude)
+make start-agents   # scripts/start_ai_agents.py  (Translator :8011 + Expert :8010)
+make run-chat       # uvicorn chat_ui en :8003 (interfaz web para preguntas)
 make clean          # borra data/
 ```
 
