@@ -11,7 +11,7 @@
 #   make demo-a2a       # ejecuta demo_a2a.py Agent-to-Agent (asume servicios arrancados)
 #   make clean          # borra data/ (claves, sqlite, status list)
 
-.PHONY: help install bootstrap run-issuer run-verifier run-registry run-vault init-vault demo demo-a2a clean
+.PHONY: help install bootstrap run-issuer run-verifier run-registry run-vault init-vault demo demo-a2a start-agents clean
 
 PYTHON ?= python3
 PIP ?= pip
@@ -30,6 +30,7 @@ help:
 	@echo "  make init-vault     — Vault Transit + clave org"
 	@echo "  make demo           — ejecuta demo H0→H3 (agente individual)"
 	@echo "  make demo-a2a       — ejecuta demo Agent-to-Agent"
+	@echo "  make start-agents   — arranca agentes IA (Translator + Expert) en :8011/:8010"
 	@echo "  make clean          — borra data/ (claves, DB, etc.)"
 
 install:
@@ -63,6 +64,9 @@ demo:
 
 demo-a2a:
 	$(PYTHON) scripts/demo_a2a.py
+
+start-agents:
+	$(PYTHON) scripts/start_ai_agents.py
 
 clean:
 	rm -rf data/agents data/keys data/agenttrust.db data/trust_framework.json

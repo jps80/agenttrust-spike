@@ -47,6 +47,18 @@ def _scale_service(service: str, replicas: int = 2) -> dict:
     }
 
 
+def _answer_question(question: str, context: str = "") -> dict:
+    from shared.claude_client import answer as claude_answer
+    print(f"[AGENT2:TOOL] Respondiendo pregunta con Claude: {question[:80]}…", flush=True)
+    response = claude_answer(question)
+    return {
+        "tool": "answer_question",
+        "question": question,
+        "answer": response,
+        "language": "en",
+    }
+
+
 PEER_TOOLS: dict[str, PeerTool] = {
     "execute:database_backup": PeerTool(
         action="execute:database_backup",
@@ -62,6 +74,11 @@ PEER_TOOLS: dict[str, PeerTool] = {
         action="execute:scale_service",
         description="Escala un servicio. Requiere mandato con execute:scale_service.",
         run=_scale_service,
+    ),
+    "execute:answer_question": PeerTool(
+        action="execute:answer_question",
+        description="Responde una pregunta en inglés usando IA (Claude). Requiere mandato con execute:answer_question.",
+        run=_answer_question,
     ),
 }
 

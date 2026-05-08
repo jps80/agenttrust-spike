@@ -20,5 +20,8 @@ python-dotenv==1.0.1
 # --- HashiCorp Vault client ---
 hvac==2.3.0
 
+# --- Anthropic SDK ---
+anthropic>=0.40.0
+
 # --- Utilities ---
 base58==2.1.1

@@ -1,7 +1,7 @@
 #  AgentAI VC ID — Spike
 
-**Validación técnica end-to-end en 4 hipótesis + protocolo Agent-to-Agent (A2A).**
-Stack: Python 3.11+, FastAPI, Ed25519, OID4VCI Pre-Authorized Code Flow, OID4VP, W3C VCDM 2.0 (JWT), Bitstring Status List, HashiCorp Vault.
+**Validación técnica end-to-end en 4 hipótesis + protocolo Agent-to-Agent (A2A) + Agentes IA reales con Claude.**
+Stack: Python 3.11+, FastAPI, Ed25519, OID4VCI Pre-Authorized Code Flow, OID4VP, W3C VCDM 2.0 (JWT), Bitstring Status List, HashiCorp Vault, Anthropic Claude API.
 
 ---
 
@@ -14,6 +14,7 @@ Stack: Python 3.11+, FastAPI, Ed25519, OID4VCI Pre-Authorized Code Flow, OID4VP,
 | **H2** | ¿Cómo custodia el agente sus claves sin Secure Enclave / biometría? | `shared/key_custody/` — interfaz con backends `LocalFile` y `Vault` |
 | **H3** | ¿Puede el agente presentar su credencial vía OID4VP de forma autónoma? | `verifier/` + `agent/holder.py` — flow sin humano en el loop |
 | **A2A** | ¿Pueden dos agentes identificarse mutuamente y delegar acciones con verificación de mandato? | `agent/peer_server.py` + `agent/peer_client.py` — protocolo Agent-to-Agent |
+| **IA** | ¿Funciona el protocolo con agentes IA reales usando LLM? | `agent/agent1_server.py` + `shared/claude_client.py` — Translator (ES→EN) + Expert (Claude Opus 4.7) |
 
 ---
 
@@ -26,50 +27,53 @@ Stack: Python 3.11+, FastAPI, Ed25519, OID4VCI Pre-Authorized Code Flow, OID4VP,
 - **Flow OID4VCI:** Pre-Authorized Code Flow (sin user-agent, encaja con holder no humano).
 - **Revocación:** W3C Bitstring Status List 1.0.
 - **Trust framework:** lista JSON de issuers de confianza (sustituible por Identfy ITF en producción).
+- **LLM:** Claude Opus 4.7 con adaptive thinking para traducción y respuesta de preguntas.
 
 ---
 
 ## Arquitectura de servicios
 
 ```
-┌──────────────────┐       ┌──────────────────┐
-│  Registry UI     │       │  HashiCorp Vault │
-│  :8002 (H0)      │       │  :8200 (Transit) │
-└────────┬─────────┘       └─────────┬────────┘
-         │                           │
-         │ registra agentes          │ custodia claves
-         ▼                           ▼
-┌──────────────────────────────────────────────┐
-│  Issuer / Mock Business Wallet               │
-│  :8000  (H1 — OID4VCI + Status List)         │
-│  /.well-known/did.json   ← did:web org       │
-│  /credential-offer/{id} · /token · /credential│
-│  /status-list/{id}  ← revocación            │
-└────────────────┬─────────────────────────────┘
-                 │ emite Mandate VC a cada agente
-        ┌────────┴─────────┐
-        ▼                  ▼
-┌───────────────┐  ┌───────────────────────────┐
-│   Agent1      │  │   Agent2                  │
-│  (Incident    │  │  (Infra Operator)         │
-│   Manager)    │  │                           │
-│  did:key:…    │  │  did:key:…                │
-│  Mandate VC   │  │  Mandate VC               │
-│               │  │  peer_server :8010        │
-│  PeerClient ──┼──┼▶ POST /peer/identify      │
-│               │  │    verifica VC de Agent1  │
-│               │◀─┼── devuelve VC de Agent2   │
-│  verifica VC  │  │                           │
-│  de Agent2    │  │                           │
-│               │  │                           │
-│  PeerClient ──┼──┼▶ POST /peer/action/…      │
-│  presenta VP  │  │    verifica mandato       │
-│  (mandato)    │  │    ejecuta acción         │
-│               │◀─┼── {authorized, result}    │
-└───────┬───────┘  └───────────────────────────┘
+┌──────────────────┐       ┌──────────────────┐       ┌─────────────────────┐
+│  Registry UI     │       │  HashiCorp Vault  │       │  Anthropic Claude   │
+│  :8002 (H0)      │       │  :8200 (Transit)  │       │  API (claude-opus-  │
+└────────┬─────────┘       └─────────┬─────────┘       │  4-7)               │
+         │                           │                  └────────┬────────────┘
+         │ registra agentes          │ custodia claves           │ IA
+         ▼                           ▼                           │
+┌──────────────────────────────────────────────┐                │
+│  Issuer / Mock Business Wallet               │                │
+│  :8000  (H1 — OID4VCI + Status List)         │                │
+│  /.well-known/did.json   ← did:web org       │                │
+│  /credential-offer/{id} · /token · /credential│               │
+│  /status-list/{id}  ← revocación            │                │
+└────────────────┬─────────────────────────────┘                │
+                 │ emite Mandate VC (OID4VCI)                    │
+        ┌────────┴───────────────────┐                          │
+        ▼                            ▼                          │
+┌────────────────────┐   ┌───────────────────────────────────────────┐
+│  Agent1            │   │  Agent2                                   │
+│  Translator        │   │  Expert                                   │
+│  :8011             │   │  :8010                                    │
+│                    │   │                                           │
+│  POST /ask         │   │  POST /peer/identify                      │
+│  {question: "¿?"} │   │  POST /peer/action/challenge              │
+│                    │   │  POST /peer/action/submit                 │
+│  1. traduce ES→EN  │   │                                           │
+│     (Claude)       │   │  Verifica VP JWT de Agent1:               │
+│  2. pide respuesta ├──▶│    [1] challenge válido                  │
+│     presenta VP    │   │    [2] firma VP (holder binding)          │
+│     (mandato)      │   │    [3] nonce anti-replay                  │
+│                    │◀──│    [4] firma VC (issuer de confianza)     │
+│  3. traduce EN→ES  │   │    [5] sujeto VC == firmante VP           │
+│     (Claude)       │   │    [6] no revocada                        │
+│  4. devuelve       │   │    [7] scope: execute:answer_question     │
+│     {answer_es}   │   │                                           │
+│                    │   │  Si autorizado → Claude responde en EN    │
+└────────────────────┘   └───────────────────────────────────────────┘
         │
-        │ presenta VP al verifier central
-        ▼            (para sus propias acciones)
+        │ (para sus propias acciones, presenta VP al verifier central)
+        ▼
 ┌──────────────────────────────────────────────┐
 │  Verifier  :8001 (H3 — OID4VP)               │
 │  - Valida VP/VC · did:web · Status List      │
@@ -78,7 +82,36 @@ Stack: Python 3.11+, FastAPI, Ed25519, OID4VCI Pre-Authorized Code Flow, OID4VP,
 └──────────────────────────────────────────────┘
 ```
 
-### Flujo A2A detallado
+### Flujo IA (Agent1 → Agent2 con mandato)
+
+```
+Usuario                  Agent1 (Translator :8011)           Agent2 (Expert :8010)   Claude API
+   │                              │                                   │                  │
+   │── POST /ask ────────────────▶│                                   │                  │
+   │   {"question": "¿...?"}      │                                   │                  │
+   │                              │── translate ES→EN ───────────────────────────────────▶│
+   │                              │◀─ "What is...?" ────────────────────────────────────│
+   │                              │                                   │                  │
+   │                              │── POST /peer/action/challenge ───▶│                  │
+   │                              │◀─ {challenge_id, nonce} ──────────│                  │
+   │                              │                                   │                  │
+   │                              │   build VP JWT                    │                  │
+   │                              │   (Mandate VC + firma + nonce)    │                  │
+   │                              │                                   │                  │
+   │                              │── POST /peer/action/submit ───────▶│                  │
+   │                              │   {vp_token, action:             │                  │
+   │                              │    execute:answer_question,       │                  │
+   │                              │    params: {question: "What?"}}   │                  │
+   │                              │                                   │── answer() ─────▶│
+   │                              │                                   │◀─ "Paris is..." ─│
+   │                              │◀─ {authorized: true,             │                  │
+   │                              │    result: {answer: "Paris is…"}} │                  │
+   │                              │── translate EN→ES ───────────────────────────────────▶│
+   │                              │◀─ "París es..." ────────────────────────────────────│
+   │◀─ {answer_es: "París es…"} ──│                                   │                  │
+```
+
+### Flujo A2A detallado (protocolo base)
 
 ```
 Agent1                          Agent2 (peer_server)
@@ -121,6 +154,7 @@ Antes de empezar, verifica que tienes instalado:
 | **Docker** | 20+ | `docker --version` | **Solo si usas Vault** (Camino B) o docker-compose |
 | **make** | cualquiera | `make --version` | Opcional, los comandos se pueden ejecutar a mano |
 | **Git** | cualquiera | `git --version` | Para clonar el repositorio |
+| **ANTHROPIC_API_KEY** | — | — | **Solo para los agentes IA**. Obtén en [console.anthropic.com](https://console.anthropic.com/) |
 
 **Sistemas operativos probados:** Linux (Ubuntu 22/24), macOS 13+. En Windows usar WSL2.
 
@@ -161,7 +195,7 @@ Debe imprimir `OK` sin errores.
 cp .env.example .env
 ```
 
-Para el Camino A no hace falta editar nada. Los valores por defecto usan custodia local:
+Para el Camino A no hace falta editar nada salvo si quieres usar los agentes IA (ver más abajo). Los valores por defecto usan custodia local:
 
 ```
 KEY_CUSTODY_BACKEND=local
@@ -198,53 +232,26 @@ AgentTrust — Bootstrap de la organización emisora
 Bootstrap completado.
 ```
 
-### Paso 5: Arrancar los tres servicios
+### Paso 5: Arrancar los tres servicios base
 
 Abre **tres terminales** (todas con el virtualenv activado y en el directorio del proyecto):
 
 **Terminal 1 — Issuer (mock Business Wallet, puerto 8000):**
 ```bash
-cd agenttrust-spike
-source .venv/bin/activate
 uvicorn issuer.main:app --port 8000 --reload
-```
-
-Espera a ver:
-```
-[issuer] Iniciado. Backend de custodia: local::org-issuer
-[issuer] DID de la organización: did:web:localhost%3A8000
-INFO:     Uvicorn running on http://127.0.0.1:8000
 ```
 
 **Terminal 2 — Verifier (puerto 8001):**
 ```bash
-cd agenttrust-spike
-source .venv/bin/activate
 uvicorn verifier.main:app --port 8001 --reload
-```
-
-Espera a ver:
-```
-[verifier] Iniciado en http://localhost:8001
-INFO:     Uvicorn running on http://127.0.0.1:8001
 ```
 
 **Terminal 3 — Registry UI (puerto 8002):**
 ```bash
-cd agenttrust-spike
-source .venv/bin/activate
 uvicorn registry_ui.main:app --port 8002 --reload
 ```
 
-Espera a ver:
-```
-[registry_ui] iniciado
-INFO:     Uvicorn running on http://127.0.0.1:8002
-```
-
 ### Paso 6: Verificar que los servicios responden
-
-En una **cuarta terminal** (o desde el navegador):
 
 ```bash
 curl http://localhost:8000/health
@@ -257,8 +264,6 @@ curl http://localhost:8002/health
 # → {"status":"ok"}
 ```
 
-Si los tres devuelven `"status":"ok"`, todo está listo.
-
 ### Paso 7: Ejecutar las demos
 
 **Demo H0→H3 (agente individual):**
@@ -266,12 +271,12 @@ Si los tres devuelven `"status":"ok"`, todo está listo.
 python3 scripts/demo.py
 ```
 
-**Demo A2A (dos agentes interactuando):**
+**Demo A2A (dos agentes interactuando con protocolo de mandato):**
 ```bash
 python3 scripts/demo_a2a.py
 ```
 
-**Salida esperada (resumen):**
+**Salida esperada (resumen demo.py):**
 
 ```
 ========================================================================
@@ -279,57 +284,153 @@ python3 scripts/demo_a2a.py
 ========================================================================
 
 → Comprobando servicios arrancados
-  ✓ issuer       http://localhost:8000  → {'status': 'ok', ...}
-  ✓ verifier     http://localhost:8001  → {'status': 'ok'}
-  ✓ registry_ui  http://localhost:8002  → {'status': 'ok'}
+  ✓ issuer       http://localhost:8000
+  ✓ verifier     http://localhost:8001
+  ✓ registry_ui  http://localhost:8002
 
-========================================================================
-  H0 — Alta del agente desde el Registry UI
-========================================================================
 → POST http://localhost:8002/api/agents
   ✓ Agente dado de alta
-    agent_id               demo-agent-001
     agent_did              did:key:z6Mkk...
-    offer_uri              http://localhost:8000/credential-offer/...
 
-========================================================================
-  H1 + H2 — El agente obtiene su Mandate Credential vía OID4VCI
-========================================================================
 → Ejecutando OID4VCI Pre-Authorized Code Flow
   ✓ VC recibida del issuer did:web:localhost%3A8000
 
-========================================================================
-  H3a — Acción DENTRO del scope (debe AUTORIZARSE)
-========================================================================
 → call_tool('restart_service', service_name='auth-api')
-  ✓ AUTORIZADA — rule=R0, reason=OK — acción dentro del mandato
+  ✓ AUTORIZADA — rule=R0, reason=OK
 
-========================================================================
-  H3b — Acción FUERA del scope (debe DENEGARSE)
-========================================================================
 → call_tool('escalate_to_human', ...) — no está en el scope
   ✓ DENEGADA correctamente — rule=R3
 
-========================================================================
-  Revocación — el mandato se revoca en caliente
-========================================================================
-→ Reintentamos la acción que antes estaba autorizada
+→ Reintentamos la acción tras revocar el mandato
   ✓ DENEGADA por revocación — el verifier consultó el Bitstring Status List
-
-========================================================================
-  Demo completada — las 4 hipótesis ejercitadas end-to-end
-========================================================================
 ```
 
 ### Paso 8 (opcional): Probar la UI en el navegador
 
 Abre http://localhost:8002/ en tu navegador. Verás el agente `demo-agent-001` ya registrado por el script de demo.
 
-Para registrar otro agente manualmente:
-1. Haz clic en **"Alta de agente"**
-2. Rellena el formulario (los campos vienen con valores por defecto razonables)
-3. Al enviar, se genera el `did:key` del agente y se crea la oferta OID4VCI
-4. En la pantalla de detalle verás el comando exacto para que el agente recoja su credencial
+---
+
+## Agentes IA con Claude (hipótesis IA)
+
+Esta es la capa más avanzada del spike: dos agentes con identidad criptográfica real que usan Claude Opus 4.7 para tareas cognitivas reales. El protocolo de mandato sigue siendo el mismo — lo que cambia es que el "trabajo" ahora lo hace un LLM.
+
+### Escenario
+
+- **Agent1 — Translator** (`:8011`): recibe una pregunta en español, la traduce al inglés con Claude, la delega a Agent2 presentando su mandato, recibe la respuesta en inglés y la traduce de vuelta al español.
+- **Agent2 — Expert** (`:8010`): acepta peticiones de agentes que tengan `execute:answer_question` en su mandato, verifica la cadena completa y responde la pregunta en inglés con Claude.
+
+### Configuración previa
+
+Añade tu API key de Anthropic en `.env`:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Obtén tu clave en [console.anthropic.com](https://console.anthropic.com/).
+
+### Arrancar los agentes IA
+
+Con los tres servicios base ya en marcha (issuer, verifier, registry_ui):
+
+```bash
+# Terminal 4 — arranca Agent1 y Agent2 automáticamente
+python3 scripts/start_ai_agents.py
+# o:
+make start-agents
+```
+
+El script:
+1. Registra ambos agentes en el Registry UI con sus scopes correspondientes
+2. Obtiene las Mandate Credentials vía OID4VCI
+3. Arranca Agent2 (Expert) en el puerto 8010
+4. Arranca Agent1 (Translator) en el puerto 8011
+
+**Salida esperada:**
+
+```
+========================================================================
+  AgentTrust — Arranque de Agentes IA (Translator + Expert)
+========================================================================
+
+→ Registrando Agent1 (Translator) con ID 'translator-001'
+  ✓ Agent1 registrado
+→ Registrando Agent2 (Expert) con ID 'expert-001'
+  ✓ Agent2 registrado
+
+→ Agent1 (translator-001) — OID4VCI…
+  ✓ Agent1 tiene su Mandate Credential
+    DID del agente           did:key:z6Mk...
+    scope autorizado         ['execute:translate', 'execute:answer_question']
+→ Agent2 (expert-001) — OID4VCI…
+  ✓ Agent2 tiene su Mandate Credential
+
+→ Arrancando Agent2 peer server (puerto 8010)…
+  ✓ Agent2 peer server listo en http://localhost:8010
+→ Arrancando Agent1 Translator (puerto 8011)…
+  ✓ Agent1 Translator listo en http://localhost:8011
+
+========================================================================
+  ¡Agentes listos!
+========================================================================
+
+  Prueba con curl:
+
+    curl -s -X POST http://localhost:8011/ask \
+         -H 'Content-Type: application/json' \
+         -d '{"question": "¿Cuál es la capital de Francia?"}' | python3 -m json.tool
+```
+
+### Probar con curl
+
+```bash
+# Pregunta simple
+curl -s -X POST http://localhost:8011/ask \
+     -H 'Content-Type: application/json' \
+     -d '{"question": "¿Cuál es la capital de Francia?"}' | python3 -m json.tool
+
+# Respuesta:
+# {
+#   "question_es": "¿Cuál es la capital de Francia?",
+#   "question_en": "What is the capital of France?",
+#   "answer_en": "The capital of France is Paris.",
+#   "answer_es": "La capital de Francia es París."
+# }
+
+# Pregunta más compleja (Claude usa adaptive thinking)
+curl -s -X POST http://localhost:8011/ask \
+     -H 'Content-Type: application/json' \
+     -d '{"question": "¿Cuáles son las principales diferencias entre TCP y UDP?"}' | python3 -m json.tool
+```
+
+### Lo que demuestran los logs
+
+Al ejecutar la petición, los logs de los servicios muestran el protocolo completo:
+
+```
+[AGENT1:ASK] Nueva pregunta recibida: ¿Cuál es la capital de Francia?
+[AGENT1:ASK] [1/3] Traduciendo pregunta ES → EN…
+[CLAUDE:TRANSLATE] Spanish → English | texto: ¿Cuál es la capital de Francia?…
+[AGENT1:ASK]   Pregunta en inglés: What is the capital of France?
+[AGENT1:ASK] [2/3] Solicitando respuesta a Agent2 (execute:answer_question)…
+[AGENT1:PEER] [1/3] Solicitando challenge → POST http://localhost:8010/peer/action/challenge
+[AGENT2:CHALLENGE] Nuevo challenge para acción 'execute:answer_question': <uuid>
+[AGENT1:PEER] [2/3] Construyendo VP JWT con mandato…
+[AGENT1:PEER] [3/3] Enviando VP y solicitando ejecución → POST http://localhost:8010/peer/action/submit
+[AGENT2:SUBMIT] [1/7] Verificando challenge…           ✓ Challenge válido
+[AGENT2:SUBMIT] [2/7] Parseando y verificando firma del VP…  ✓ Firma verificada
+[AGENT2:SUBMIT] [3/7] Verificando nonce y audience…    ✓ Anti-replay OK
+[AGENT2:SUBMIT] [4/7] Extrayendo VC del VP…
+[AGENT2:SUBMIT] [5/7] Verificando issuer y firma de la VC…  ✓ Issuer de confianza
+[AGENT2:SUBMIT] [6/7] Verificando holder binding…      ✓ Sujeto == firmante VP
+[AGENT2:SUBMIT] [7a/7] Verificando revocación…         ✓ No revocada
+[AGENT2:SUBMIT] [7b/7] Evaluando política de mandato… scope tiene execute:answer_question ✓
+[AGENT2:SUBMIT] ✅ Mandato válido. Ejecutando acción 'execute:answer_question'…
+[CLAUDE:ANSWER] pregunta: What is the capital of France?…
+[AGENT1:ASK] [3/3] Traduciendo respuesta EN → ES…
+[AGENT1:ASK] ✅ Ciclo completo. Devolviendo al usuario.
+```
 
 ---
 
@@ -363,28 +464,11 @@ curl http://localhost:8200/v1/sys/health
 bash scripts/init_vault.sh
 ```
 
-**Salida esperada:**
-
-```
-=== AgentTrust — Vault Transit setup ===
-  VAULT_ADDR   = http://localhost:8200
-  MOUNT POINT  = transit
-[1/3] Habilitando motor transit en transit...
-[2/3] Creando clave Ed25519 'org-issuer'...
-[3/3] Verificando...
-  ...
-✓ Vault listo.
-```
-
 ### Paso 6: Configurar `.env` para usar Vault
 
 Edita `.env` y cambia esta línea:
 
 ```bash
-# Antes:
-KEY_CUSTODY_BACKEND=local
-
-# Después:
 KEY_CUSTODY_BACKEND=vault
 ```
 
@@ -399,51 +483,31 @@ VAULT_TRANSIT_MOUNT=transit
 ### Paso 7: Bootstrap + servicios + demo
 
 ```bash
-# Bootstrap (ahora usará Vault en vez de fichero local)
 python3 scripts/bootstrap_org.py
-
-# Verás:
-#   Custody key_id         = vault::transit/org-issuer
-#   Algoritmo              = EdDSA
+# Verás: Custody key_id = vault::transit/org-issuer
 ```
 
-Luego arranca los tres servicios y ejecuta la demo igual que en el Camino A (pasos 5 a 8). La diferencia es que ahora verás:
-
-```
-  H2 — la clave privada NO está en este proceso
-    backend custodia       vault::transit/org-issuer
-    estado                 la clave reside en Vault, sólo se llama POST /v1/transit/sign
-```
+Luego arranca los tres servicios y ejecuta la demo igual que en el Camino A. La diferencia es que ahora las claves de todos los agentes viven en Vault.
 
 ---
 
 ## Puesta en marcha — Docker Compose (todo de una vez)
 
-Si prefieres no abrir múltiples terminales:
-
 ```bash
 # Arranca Vault + Issuer + Verifier + Registry UI
 docker compose up -d
 
-# Espera ~30s a que los servicios arranquen (pip install dentro del contenedor)
-# Verifica:
+# Espera ~30s y verifica:
 docker compose ps
-# Todos deben estar "running" o "Up"
 
-# Ejecuta la demo
+# Ejecuta la demo H0→H3
 docker compose run --rm demo
 
 # Para todo y limpia
 docker compose down -v
 ```
 
-> **Nota:** Docker Compose usa `python:3.11-slim` y hace `pip install` al arrancar cada contenedor. La primera vez tarda ~60s. Las siguientes arrancan más rápido gracias al volumen compartido.
-
-Para cambiar entre custodia local y Vault en Docker Compose, edita la variable `KEY_CUSTODY_BACKEND` en el entorno:
-
-```bash
-KEY_CUSTODY_BACKEND=vault docker compose up -d
-```
+> **Nota:** Los agentes IA (`start_ai_agents.py`) no están en el Docker Compose por la dependencia de `ANTHROPIC_API_KEY`. Úsalos con el Camino A o B local.
 
 ---
 
@@ -452,7 +516,7 @@ KEY_CUSTODY_BACKEND=vault docker compose up -d
 ```
 agenttrust-spike/
 ├── README.md                               # Este documento
-├── requirements.txt                        # Dependencias Python
+├── requirements.txt                        # Dependencias Python (incluye anthropic)
 ├── .env.example                            # Variables de entorno (copiar a .env)
 ├── .gitignore
 ├── docker-compose.yml                      # Orquestación opcional
@@ -465,6 +529,7 @@ agenttrust-spike/
 │   ├── did_web.py                          # Resolución did:web vía HTTP
 │   ├── credential.py                       # Mandate Credential schema y builder
 │   ├── status_list.py                      # Bitstring Status List 1.0
+│   ├── claude_client.py                    # [IA] Wrapper Anthropic SDK: translate() + answer()
 │   └── key_custody/
 │       ├── __init__.py                     # Factory build_custody() → LocalFile o Vault
 │       ├── base.py                         # Interfaz KeyCustody (sign / public_jwk / rotate)
@@ -482,7 +547,7 @@ agenttrust-spike/
 │   ├── policy.py                           # Evaluación de mandato (scope, constraints, validez)
 │   └── trust_framework.py                  # Lista de issuers de confianza
 │
-├── agent/                                  # El agente Tipo 3
+├── agent/                                  # Los agentes
 │   ├── __init__.py
 │   ├── main.py                             # CLI: subcomandos fetch y run
 │   ├── holder.py                           # OID4VCI receiver + OID4VP presenter
@@ -490,53 +555,67 @@ agenttrust-spike/
 │   ├── tools.py                            # Tools de ejemplo (read_incident, restart_service, ...)
 │   ├── peer_server.py                      # [A2A] FastAPI: Agent2 acepta peticiones de otros agentes
 │   ├── peer_client.py                      # [A2A] Cliente HTTP: Agent1 llama a Agent2
-│   └── peer_tools.py                       # [A2A] Acciones que Agent2 puede ejecutar (database_backup, …)
+│   ├── peer_tools.py                       # [A2A] Acciones que Agent2 puede ejecutar (database_backup, answer_question, …)
+│   └── agent1_server.py                    # [IA] FastAPI :8011 — Translator ES↔EN
 │
 ├── registry_ui/                            # H0: mini-UI de alta de agentes
 │   ├── __init__.py
 │   ├── main.py                             # FastAPI + Jinja2 + API JSON
 │   ├── storage.py                          # SQLite: agentes registrados
 │   └── templates/
-│       ├── base.html                       # Layout base
-│       ├── index.html                      # Listado de agentes
-│       ├── register.html                   # Formulario de alta
-│       └── agent_detail.html               # Detalle con credential_offer_uri
+│       ├── base.html
+│       ├── index.html
+│       ├── register.html
+│       └── agent_detail.html
 │
 ├── scripts/
 │   ├── bootstrap_org.py                    # Inicializa identidad de la organización
 │   ├── init_vault.sh                       # Setup de Vault Transit + clave org
 │   ├── demo.py                             # Demo H0→H1→H2→H3 (agente individual)
-│   └── demo_a2a.py                         # [A2A] Demo Agent-to-Agent end-to-end
+│   ├── demo_a2a.py                         # [A2A] Demo Agent-to-Agent end-to-end
+│   └── start_ai_agents.py                  # [IA] Arranca Translator (:8011) + Expert (:8010)
 │
 └── data/                                   # Generado en runtime (en .gitignore)
     └── .gitkeep
     # Tras ejecutar se crea:
     # ├── keys/                             # Claves Ed25519 (solo custodia local)
-    # │   ├── org-issuer.priv
-    # │   └── agent-demo-agent-001.priv
-    # ├── agents/
-    # │   └── demo-agent-001.vc.json        # VC persistida del agente
+    # ├── agents/                           # VCs persistidas de los agentes
     # ├── agenttrust.db                     # SQLite compartida
     # └── trust_framework.json              # Lista de issuers de confianza
 ```
-
-**Total: 39 archivos.** Los `__init__.py` son marcadores de paquete Python necesarios para que funcionen los `import`.
 
 ---
 
 ## Mapa hipótesis → ficheros (lectura recomendada)
 
-- **H0** → `registry_ui/main.py` (formulario + API) + `registry_ui/storage.py` + `scripts/bootstrap_org.py`
-- **H1** → `issuer/main.py` (endpoints OID4VCI) + `shared/credential.py` (schema Mandate Credential) + `agent/holder.py` (lado holder del flow)
-- **H2** → `shared/key_custody/base.py` (la abstracción) + `local_file.py` y `vault.py` (las dos implementaciones)
-- **H3** → `verifier/main.py` (validación completa) + `verifier/policy.py` (reglas R0-R5) + `agent/holder.py` (presentación autónoma)
-- **A2A** → `agent/peer_server.py` (servidor de Agent2) + `agent/peer_client.py` (cliente de Agent1) + `scripts/demo_a2a.py`
+- **H0** → `registry_ui/main.py` + `registry_ui/storage.py` + `scripts/bootstrap_org.py`
+- **H1** → `issuer/main.py` + `shared/credential.py` + `agent/holder.py`
+- **H2** → `shared/key_custody/base.py` + `local_file.py` + `vault.py`
+- **H3** → `verifier/main.py` + `verifier/policy.py` + `agent/holder.py`
+- **A2A** → `agent/peer_server.py` + `agent/peer_client.py` + `scripts/demo_a2a.py`
+- **IA** → `shared/claude_client.py` + `agent/agent1_server.py` + `agent/peer_tools.py` (execute:answer_question) + `scripts/start_ai_agents.py`
+
+---
+
+## Atajos con Make
+
+```bash
+make install        # pip install + crea .env
+make bootstrap      # bootstrap_org.py
+make run-issuer     # uvicorn issuer en :8000
+make run-verifier   # uvicorn verifier en :8001
+make run-registry   # uvicorn registry_ui en :8002
+make run-vault      # docker run vault dev mode
+make init-vault     # init_vault.sh
+make demo           # scripts/demo.py  (H0→H3)
+make demo-a2a       # scripts/demo_a2a.py  (A2A)
+make start-agents   # scripts/start_ai_agents.py  (Translator + Expert con Claude)
+make clean          # borra data/
+```
 
 ---
 
 ## Uso manual del agente (sin demo script)
-
-Además del script `demo.py`, el agente se puede operar desde la línea de comandos:
 
 ### Registrar un agente y obtener su credencial
 
@@ -552,8 +631,6 @@ curl -s -X POST http://localhost:8002/api/agents \
     "valid_from": "2025-01-01T00:00:00Z",
     "valid_until": "2099-01-01T00:00:00Z"
   }' | python3 -m json.tool
-
-# → Copia el valor de "credential_offer_uri" del output
 
 # 2. El agente recoge su VC
 python3 -m agent.main fetch \
@@ -574,31 +651,24 @@ python3 -m agent.main run \
 python3 -m agent.main run \
   --agent-id mi-agente \
   --tool escalate_to_human \
-  --arg incident_id=INC-999 \
-  --arg reason=test
+  --arg incident_id=INC-999
 ```
 
 ### Revocar el mandato de un agente
 
 ```bash
-# Consulta el did:key del agente
-curl -s http://localhost:8002/api/agents | python3 -m json.tool | grep agent_did
-
-# Revoca
 curl -s -X POST http://localhost:8000/admin/revoke \
   -H 'Content-Type: application/json' \
   -d '{"agent_did": "did:key:z6Mkk..."}'
 ```
 
-Tras la revocación, cualquier intento del agente de presentar su credencial será rechazado por el verifier.
+Tras la revocación, cualquier intento del agente de presentar su credencial será rechazado.
 
 ---
 
 ## Troubleshooting
 
 ### Error: `ModuleNotFoundError: No module named 'shared'`
-
-Estás ejecutando el comando fuera del directorio del proyecto, o sin el virtualenv activado.
 
 ```bash
 cd agenttrust-spike
@@ -607,7 +677,7 @@ source .venv/bin/activate
 
 ### Error: `Connection refused` al ejecutar demo.py
 
-Los tres servicios deben estar corriendo. Verifica:
+Los tres servicios deben estar corriendo:
 
 ```bash
 curl http://localhost:8000/health && echo OK
@@ -615,32 +685,26 @@ curl http://localhost:8001/health && echo OK
 curl http://localhost:8002/health && echo OK
 ```
 
-Si alguno no responde, vuelve al Paso 5 y arráncalo.
+### Error: `ANTHROPIC_API_KEY no está configurada`
+
+```bash
+# Añade en .env:
+ANTHROPIC_API_KEY=sk-ant-...
+# Y recarga el proceso
+```
 
 ### Error: `VAULT_TOKEN` o `is_authenticated` al arrancar con `KEY_CUSTODY_BACKEND=vault`
 
-Vault no está corriendo o el token no es válido:
-
 ```bash
-# ¿Corre Vault?
 docker ps | grep vault-spike
-
-# Si no corre:
-docker start vault-spike
-# O recréalo:
-docker run -d --name vault-spike -p 8200:8200 \
-  -e 'VAULT_DEV_ROOT_TOKEN_ID=root-token-spike' hashicorp/vault:latest
-
-# Reinicializa Transit
+docker start vault-spike   # si no corre
 bash scripts/init_vault.sh
 ```
 
 ### Error: `sqlite3.OperationalError: database is locked`
 
-Dos servicios intentan escribir en la misma DB simultáneamente. Es raro pero puede pasar si un servicio no se cerró limpiamente. Solución:
-
 ```bash
-make clean   # o: rm -f data/agenttrust.db
+make clean
 # Luego re-arranca los servicios
 ```
 
@@ -648,27 +712,7 @@ make clean   # o: rm -f data/agenttrust.db
 
 ```bash
 make clean
-# O manualmente:
-rm -rf data/agents data/keys data/agenttrust.db data/trust_framework.json
-```
-
-Después repite desde el Paso 4 (bootstrap).
-
----
-
-## Atajos con Make
-
-```bash
-make install        # pip install + crea .env
-make bootstrap      # bootstrap_org.py
-make run-issuer     # uvicorn issuer en :8000
-make run-verifier   # uvicorn verifier en :8001
-make run-registry   # uvicorn registry_ui en :8002
-make run-vault      # docker run vault dev mode
-make init-vault     # init_vault.sh
-make demo           # scripts/demo.py  (H0→H3)
-make demo-a2a       # scripts/demo_a2a.py  (A2A)
-make clean          # borra data/
+# Después repite desde el Paso 4 (bootstrap)
 ```
 
 ---
@@ -683,6 +727,7 @@ make clean          # borra data/
 | Integración real con Identfy Business Wallet | Mock — el spike valida el contrato OID4VCI, no el deploy productivo |
 | UI productiva | La de H0 es funcional, no productiva |
 | Descubrimiento automático de peers | Los peers se configuran por URL. Service discovery en iteración 2 |
+| Streaming de respuesta Claude | Implementable; en el spike se usa respuesta síncrona para simplicidad |
 
 ---
 
@@ -690,7 +735,8 @@ make clean          # borra data/
 
 El spike cierra cuando se entrega:
 
-1. **Demo funcional H0→H3** — `python scripts/demo.py` con output legible mostrando identidad asignada, credencial recibida, presentación y decisión del verifier
-2. **Demo A2A** — `python scripts/demo_a2a.py` mostrando identificación mutua entre agentes, presentación de mandato y ejecución delegada
-3. **Documento de decisión por hipótesis** — go/no-go con evidencia (el README recoge las decisiones de stack)
-4. **Lista de hallazgos para iteración 1** — qué se reescribirá, qué se reutilizará
+1. **Demo funcional H0→H3** — `python scripts/demo.py` mostrando identidad asignada, credencial recibida, presentación y decisión del verifier
+2. **Demo A2A** — `python scripts/demo_a2a.py` mostrando identificación mutua, presentación de mandato y ejecución delegada con revocación
+3. **Demo IA** — `python scripts/start_ai_agents.py` + curl mostrando el ciclo completo: pregunta en español → Claude traduce → Agent2 verifica mandato → Claude responde → respuesta en español
+4. **Documento de decisión por hipótesis** — go/no-go con evidencia (el README recoge las decisiones de stack)
+5. **Lista de hallazgos para iteración 1** — qué se reescribirá, qué se reutilizará
